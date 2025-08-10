@@ -74,9 +74,14 @@ const handle = createLoggedHandler(logger);
 
 let proxyWorker: Worker | null = null;
 
-// Needed, otherwise electron in MacOS/Linux will not be able
-// to find node/pnpm.
-fixPath();
+// Lazily fix the PATH so we don't slow down startup on Linux.
+let pathFixed = false;
+function ensurePath() {
+  if (!pathFixed) {
+    fixPath();
+    pathFixed = true;
+  }
+}
 
 async function executeApp({
   appPath,
@@ -107,6 +112,7 @@ async function executeAppLocalNode({
   event: Electron.IpcMainInvokeEvent;
   isNeon: boolean;
 }): Promise<void> {
+  ensurePath();
   const spawnedProcess = spawn(
     "(pnpm install && pnpm run dev --port 32100) || (npm install --legacy-peer-deps && npm run dev -- --port 32100)",
     [],
