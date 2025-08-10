@@ -457,6 +457,18 @@ ${componentSnippet}
               supabaseProjectId: updatedChat.app.supabaseProjectId,
             }));
         } else if (
+          settings.supabase?.localUrl &&
+          settings.supabase?.localAnonKey
+        ) {
+          systemPrompt +=
+            "\n\n" +
+            SUPABASE_AVAILABLE_SYSTEM_PROMPT +
+            "\n\n" +
+            (await getSupabaseContext({
+              supabaseUrl: settings.supabase.localUrl,
+              supabaseAnonKey: settings.supabase.localAnonKey,
+            }));
+        } else if (
           // Neon projects don't need Supabase.
           !updatedChat.app?.neonProjectId
         ) {
@@ -641,11 +653,17 @@ This conversation includes one or more image attachments. When the user uploads 
         }) => {
           if (
             fullResponse.includes("$$SUPABASE_CLIENT_CODE$$") &&
-            updatedChat.app?.supabaseProjectId
+            (updatedChat.app?.supabaseProjectId ||
+              (settings.supabase?.localUrl && settings.supabase?.localAnonKey))
           ) {
-            const supabaseClientCode = await getSupabaseClientCode({
-              projectId: updatedChat.app?.supabaseProjectId,
-            });
+            const supabaseClientCode = await getSupabaseClientCode(
+              updatedChat.app?.supabaseProjectId
+                ? { projectId: updatedChat.app.supabaseProjectId }
+                : {
+                    supabaseUrl: settings.supabase!.localUrl!,
+                    supabaseAnonKey: settings.supabase!.localAnonKey!,
+                  },
+            );
             fullResponse = fullResponse.replace(
               "$$SUPABASE_CLIENT_CODE$$",
               supabaseClientCode,

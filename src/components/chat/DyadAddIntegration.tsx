@@ -5,6 +5,7 @@ import { selectedAppIdAtom } from "@/atoms/appAtoms";
 import { useAtomValue } from "jotai";
 import { showError } from "@/lib/toast";
 import { useLoadApp } from "@/hooks/useLoadApp";
+import { useSettings } from "@/hooks/useSettings";
 
 interface DyadAddIntegrationProps {
   node: {
@@ -24,6 +25,7 @@ export const DyadAddIntegration: React.FC<DyadAddIntegrationProps> = ({
   const { provider } = node.properties;
   const appId = useAtomValue(selectedAppIdAtom);
   const { app } = useLoadApp(appId);
+  const { settings } = useSettings();
 
   const handleSetupClick = () => {
     if (!appId) {
@@ -33,7 +35,11 @@ export const DyadAddIntegration: React.FC<DyadAddIntegrationProps> = ({
     navigate({ to: "/app-details", search: { appId } });
   };
 
-  if (app?.supabaseProjectName) {
+  const hasSupabase =
+    app?.supabaseProjectName ||
+    (settings?.supabase?.localUrl && settings?.supabase?.localAnonKey);
+
+  if (hasSupabase) {
     return (
       <div className="flex flex-col  my-2 p-3 border border-green-300 rounded-lg bg-green-50 shadow-sm">
         <div className="flex items-center space-x-2">
@@ -66,7 +72,7 @@ export const DyadAddIntegration: React.FC<DyadAddIntegrationProps> = ({
           <p>
             This app is connected to Supabase project:{" "}
             <span className="font-mono font-medium bg-green-100 px-1 py-0.5 rounded">
-              {app.supabaseProjectName}
+              {app.supabaseProjectName || settings?.supabase?.localUrl}
             </span>
           </p>
           <p>Click the chat suggestion "Keep going" to continue.</p>

@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 
 import { IpcClient } from "@/ipc/ipc_client";
 import { toast } from "sonner";
@@ -38,7 +39,7 @@ import { ExternalLink } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 
 export function SupabaseConnector({ appId }: { appId: number }) {
-  const { settings, refreshSettings } = useSettings();
+  const { settings, updateSettings, refreshSettings } = useSettings();
   const { app, refreshApp } = useLoadApp(appId);
   const { lastDeepLink } = useDeepLink();
   const { isDarkMode } = useTheme();
@@ -60,6 +61,11 @@ export function SupabaseConnector({ appId }: { appId: number }) {
     unsetAppProject,
   } = useSupabase();
   const currentProjectId = app?.supabaseProjectId;
+
+  const [localUrl, setLocalUrl] = useState(settings?.supabase?.localUrl || "");
+  const [localAnonKey, setLocalAnonKey] = useState(
+    settings?.supabase?.localAnonKey || "",
+  );
 
   useEffect(() => {
     // Load projects when the component mounts and user is connected
@@ -83,9 +89,41 @@ export function SupabaseConnector({ appId }: { appId: number }) {
       await unsetAppProject(appId);
       toast.success("Project disconnected from app successfully");
       await refreshApp();
+      await updateSettings({
+        supabase: {
+          ...settings?.supabase,
+          localUrl: undefined,
+          localAnonKey: undefined,
+        },
+      });
+      await refreshSettings();
     } catch (error) {
       console.error("Failed to disconnect project:", error);
       toast.error("Failed to disconnect project from app");
+    }
+  };
+
+  const handleLocalConnect = async () => {
+    try {
+      const healthUrl = `${localUrl.replace(/\/$/, "")}/auth/v1/health`;
+      const res = await fetch(healthUrl);
+      if (!res.ok) {
+        throw new Error(`Supabase not reachable at ${healthUrl}`);
+      }
+
+      await updateSettings({
+        supabase: {
+          ...settings?.supabase,
+          localUrl,
+          localAnonKey,
+        },
+      });
+      await unsetAppProject(appId);
+      toast.success("Connected to local Supabase instance");
+      await refreshApp();
+      await refreshSettings();
+    } catch (error) {
+      toast.error("Failed to connect to local Supabase: " + error);
     }
   };
 
@@ -197,30 +235,82 @@ export function SupabaseConnector({ appId }: { appId: number }) {
     );
   }
 
+  if (
+    !app?.supabaseProjectId &&
+    settings?.supabase?.localUrl &&
+    settings?.supabase?.localAnonKey
+  ) {
+    return (
+      <Card className="mt-1">
+        <CardHeader>
+          <CardTitle>Local Supabase</CardTitle>
+          <CardDescription>
+            Connected to {settings.supabase.localUrl}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button variant="destructive" onClick={handleUnsetProject}>
+            Disconnect
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
-    <div className="flex flex-col space-y-4 p-4 border rounded-md">
-      <div className="flex flex-col md:flex-row items-center justify-between">
-        <h2 className="text-lg font-medium">Integrations</h2>
-        <img
-          onClick={async () => {
-            if (settings?.isTestMode) {
-              await IpcClient.getInstance().fakeHandleSupabaseConnect({
-                appId,
-                fakeProjectId: "fake-project-id",
-              });
-            } else {
-              await IpcClient.getInstance().openExternalUrl(
-                "https://supabase-oauth.dyad.sh/api/connect-supabase/login",
-              );
-            }
-          }}
-          src={isDarkMode ? connectSupabaseDark : connectSupabaseLight}
-          alt="Connect to Supabase"
-          className="w-full h-10 min-h-8 min-w-20 cursor-pointer"
-          data-testid="connect-supabase-button"
-          // className="h-10"
-        />
-      </div>
-    </div>
+    <Card className="mt-1">
+      <CardHeader>
+        <CardTitle>Supabase</CardTitle>
+        <CardDescription>
+          Connect a local self-hosted instance or sign in to Supabase Cloud
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="supabase-url">Local URL</Label>
+          <Input
+            id="supabase-url"
+            value={localUrl}
+            onChange={(e) => setLocalUrl(e.target.value)}
+            placeholder="http://localhost:54321"
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="supabase-key">Local Anon Key</Label>
+          <Input
+            id="supabase-key"
+            value={localAnonKey}
+            onChange={(e) => setLocalAnonKey(e.target.value)}
+            placeholder="public-anon-key"
+          />
+        </div>
+        <Button
+          onClick={handleLocalConnect}
+          disabled={!localUrl || !localAnonKey}
+        >
+          Connect Local Supabase
+        </Button>
+        <div className="pt-2">
+          <img
+            onClick={async () => {
+              if (settings?.isTestMode) {
+                await IpcClient.getInstance().fakeHandleSupabaseConnect({
+                  appId,
+                  fakeProjectId: "fake-project-id",
+                });
+              } else {
+                await IpcClient.getInstance().openExternalUrl(
+                  "https://supabase-oauth.dyad.sh/api/connect-supabase/login",
+                );
+              }
+            }}
+            src={isDarkMode ? connectSupabaseDark : connectSupabaseLight}
+            alt="Connect to Supabase"
+            className="w-full h-10 min-h-8 min-w-20 cursor-pointer"
+            data-testid="connect-supabase-button"
+          />
+        </div>
+      </CardContent>
+    </Card>
   );
 }
