@@ -904,55 +904,45 @@ ${problemReport.problems
           .update(messages)
           .set({ content: fullResponse })
           .where(eq(messages.id, placeholderAssistantMessage.id));
-        const settings = readSettings();
-        if (
-          settings.autoApproveChanges &&
-          settings.selectedChatMode !== "ask"
-        ) {
-          const status = await processFullResponseActions(
-            fullResponse,
-            req.chatId,
-            {
-              chatSummary,
-              messageId: placeholderAssistantMessage.id,
-            }, // Use placeholder ID
-          );
 
-          const chat = await db.query.chats.findFirst({
-            where: eq(chats.id, req.chatId),
-            with: {
-              messages: {
-                orderBy: (messages, { asc }) => [asc(messages.createdAt)],
-              },
+        const status = await processFullResponseActions(
+          fullResponse,
+          req.chatId,
+          {
+            chatSummary,
+            messageId: placeholderAssistantMessage.id,
+          }, // Use placeholder ID
+        );
+
+        const chat = await db.query.chats.findFirst({
+          where: eq(chats.id, req.chatId),
+          with: {
+            messages: {
+              orderBy: (messages, { asc }) => [asc(messages.createdAt)],
             },
-          });
+          },
+        });
 
-          safeSend(event.sender, "chat:response:chunk", {
-            chatId: req.chatId,
-            messages: chat!.messages,
-          });
+        safeSend(event.sender, "chat:response:chunk", {
+          chatId: req.chatId,
+          messages: chat!.messages,
+        });
 
-          if (status.error) {
-            safeSend(
-              event.sender,
-              "chat:response:error",
-              `Sorry, there was an error applying the AI's changes: ${status.error}`,
-            );
-          }
-
-          // Signal that the stream has completed
-          safeSend(event.sender, "chat:response:end", {
-            chatId: req.chatId,
-            updatedFiles: status.updatedFiles ?? false,
-            extraFiles: status.extraFiles,
-            extraFilesError: status.extraFilesError,
-          } satisfies ChatResponseEnd);
-        } else {
-          safeSend(event.sender, "chat:response:end", {
-            chatId: req.chatId,
-            updatedFiles: false,
-          } satisfies ChatResponseEnd);
+        if (status.error) {
+          safeSend(
+            event.sender,
+            "chat:response:error",
+            `Sorry, there was an error applying the AI's changes: ${status.error}`,
+          );
         }
+
+        // Signal that the stream has completed
+        safeSend(event.sender, "chat:response:end", {
+          chatId: req.chatId,
+          updatedFiles: status.updatedFiles ?? false,
+          extraFiles: status.extraFiles,
+          extraFilesError: status.extraFilesError,
+        } satisfies ChatResponseEnd);
       }
 
       // Clean up any temporary files

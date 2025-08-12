@@ -348,6 +348,8 @@ function renderCustomTag(
             properties: {
               state: getState({ isStreaming, inProgress }),
               description: attributes.description || "",
+              result: attributes.result || "",
+              error: attributes.error || "",
             },
           }}
         >

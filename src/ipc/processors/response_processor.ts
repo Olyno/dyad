@@ -100,6 +100,11 @@ export async function processFullResponseActions(
   }
 
   const settings: UserSettings = readSettings();
+  // Apply file changes unless auto-approve is explicitly disabled or we're in ask mode
+  const applyChanges =
+    settings.selectedChatMode !== "ask" &&
+    settings.autoApproveChanges !== false;
+
   const appPath = getDyadAppPath(chatWithApp.app.path);
   const writtenFiles: string[] = [];
   const renamedFiles: string[] = [];
@@ -108,6 +113,14 @@ export async function processFullResponseActions(
 
   const warnings: Output[] = [];
   const errors: Output[] = [];
+
+  const escapeAttribute = (value: string): string =>
+    value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
 
   try {
     // Extract all tags
@@ -134,9 +147,22 @@ export async function processFullResponseActions(
 
     // Handle SQL execution tags
     if (dyadExecuteSqlQueries.length > 0) {
-      for (const query of dyadExecuteSqlQueries) {
+      const dyadExecuteSqlRegex =
+        /<dyad-execute-sql([^>]*)>([\s\S]*?)<\/dyad-execute-sql>/g;
+      const matches = [...fullResponse.matchAll(dyadExecuteSqlRegex)];
+      let updatedResponse = fullResponse;
+
+      for (let i = 0; i < dyadExecuteSqlQueries.length; i++) {
+        const query = dyadExecuteSqlQueries[i];
+        const match = matches[i];
+        if (!match) continue;
+
+        const originalTag = match[0];
+        const attrs = match[1] || "";
+        const inner = match[2];
+
         try {
-          await executeSupabaseSql({
+          const result = await executeSupabaseSql({
             supabaseProjectId: chatWithApp.app.supabaseProjectId!,
             query: query.content,
           });
@@ -152,23 +178,30 @@ export async function processFullResponseActions(
               writtenFiles.push(migrationFilePath);
             } catch (error) {
               errors.push({
-                message: `Failed to write SQL migration file for: ${query.description}`,
+                message: `Failed to write SQL migration file for: ${
+                  query.description
+                }`,
                 error: error,
               });
             }
           }
+
+          const escapedResult = escapeAttribute(result);
+          const newTag = `<dyad-execute-sql${attrs} result="${escapedResult}">${inner}</dyad-execute-sql>`;
+          updatedResponse = updatedResponse.replace(originalTag, newTag);
         } catch (error) {
-          errors.push({
-            message: `Failed to execute SQL query: ${query.content}`,
-            error: error,
-          });
+          const escapedError = escapeAttribute((error as any).toString());
+          const newTag = `<dyad-execute-sql${attrs} error="${escapedError}">${inner}</dyad-execute-sql>`;
+          updatedResponse = updatedResponse.replace(originalTag, newTag);
         }
       }
+
+      fullResponse = updatedResponse;
       logger.log(`Executed ${dyadExecuteSqlQueries.length} SQL queries`);
     }
 
     // TODO: Handle add dependency tags
-    if (dyadAddDependencyPackages.length > 0) {
+    if (applyChanges && dyadAddDependencyPackages.length > 0) {
       try {
         await executeAddDependency({
           packages: dyadAddDependencyPackages,
@@ -206,177 +239,183 @@ export async function processFullResponseActions(
     // - LLMs like to rename and then edit the same file.
     //////////////////////
 
-    // Process all file deletions
-    for (const filePath of dyadDeletePaths) {
-      const fullFilePath = safeJoin(appPath, filePath);
+    if (applyChanges) {
+      // Process all file deletions
+      for (const filePath of dyadDeletePaths) {
+        const fullFilePath = safeJoin(appPath, filePath);
 
-      // Delete the file if it exists
-      if (fs.existsSync(fullFilePath)) {
-        if (fs.lstatSync(fullFilePath).isDirectory()) {
-          fs.rmdirSync(fullFilePath, { recursive: true });
-        } else {
-          fs.unlinkSync(fullFilePath);
-        }
-        logger.log(`Successfully deleted file: ${fullFilePath}`);
-        deletedFiles.push(filePath);
+        // Delete the file if it exists
+        if (fs.existsSync(fullFilePath)) {
+          if (fs.lstatSync(fullFilePath).isDirectory()) {
+            fs.rmdirSync(fullFilePath, { recursive: true });
+          } else {
+            fs.unlinkSync(fullFilePath);
+          }
+          logger.log(`Successfully deleted file: ${fullFilePath}`);
+          deletedFiles.push(filePath);
 
-        // Remove the file from git
-        try {
-          await git.remove({
-            fs,
-            dir: appPath,
-            filepath: filePath,
-          });
-        } catch (error) {
-          logger.warn(`Failed to git remove deleted file ${filePath}:`, error);
-          // Continue even if remove fails as the file was still deleted
-        }
-      } else {
-        logger.warn(`File to delete does not exist: ${fullFilePath}`);
-      }
-      if (isServerFunction(filePath)) {
-        try {
-          await deleteSupabaseFunction({
-            supabaseProjectId: chatWithApp.app.supabaseProjectId!,
-            functionName: getFunctionNameFromPath(filePath),
-          });
-        } catch (error) {
-          errors.push({
-            message: `Failed to delete Supabase function: ${filePath}`,
-            error: error,
-          });
-        }
-      }
-    }
-
-    // Process all file renames
-    for (const tag of dyadRenameTags) {
-      const fromPath = safeJoin(appPath, tag.from);
-      const toPath = safeJoin(appPath, tag.to);
-
-      // Ensure target directory exists
-      const dirPath = path.dirname(toPath);
-      fs.mkdirSync(dirPath, { recursive: true });
-
-      // Rename the file
-      if (fs.existsSync(fromPath)) {
-        fs.renameSync(fromPath, toPath);
-        logger.log(`Successfully renamed file: ${fromPath} -> ${toPath}`);
-        renamedFiles.push(tag.to);
-
-        // Add the new file and remove the old one from git
-        await git.add({
-          fs,
-          dir: appPath,
-          filepath: tag.to,
-        });
-        try {
-          await git.remove({
-            fs,
-            dir: appPath,
-            filepath: tag.from,
-          });
-        } catch (error) {
-          logger.warn(`Failed to git remove old file ${tag.from}:`, error);
-          // Continue even if remove fails as the file was still renamed
-        }
-      } else {
-        logger.warn(`Source file for rename does not exist: ${fromPath}`);
-      }
-      if (isServerFunction(tag.from)) {
-        try {
-          await deleteSupabaseFunction({
-            supabaseProjectId: chatWithApp.app.supabaseProjectId!,
-            functionName: getFunctionNameFromPath(tag.from),
-          });
-        } catch (error) {
-          warnings.push({
-            message: `Failed to delete Supabase function: ${tag.from} as part of renaming ${tag.from} to ${tag.to}`,
-            error: error,
-          });
-        }
-      }
-      if (isServerFunction(tag.to)) {
-        try {
-          await deploySupabaseFunctions({
-            supabaseProjectId: chatWithApp.app.supabaseProjectId!,
-            functionName: getFunctionNameFromPath(tag.to),
-            content: await readFileFromFunctionPath(toPath),
-          });
-        } catch (error) {
-          errors.push({
-            message: `Failed to deploy Supabase function: ${tag.to} as part of renaming ${tag.from} to ${tag.to}`,
-            error: error,
-          });
-        }
-      }
-    }
-
-    // Process all file writes
-    for (const tag of dyadWriteTags) {
-      const filePath = tag.path;
-      let content: string | Buffer = tag.content;
-      const fullFilePath = safeJoin(appPath, filePath);
-
-      // Check if content (stripped of whitespace) exactly matches a file ID and replace with actual file content
-      if (fileUploadsMap) {
-        const trimmedContent = tag.content.trim();
-        const fileInfo = fileUploadsMap.get(trimmedContent);
-        if (fileInfo) {
+          // Remove the file from git
           try {
-            const fileContent = await readFile(fileInfo.filePath);
-            content = fileContent;
-            logger.log(
-              `Replaced file ID ${trimmedContent} with content from ${fileInfo.originalName}`,
-            );
+            await git.remove({
+              fs,
+              dir: appPath,
+              filepath: filePath,
+            });
           } catch (error) {
-            logger.error(
-              `Failed to read uploaded file ${fileInfo.originalName}:`,
+            logger.warn(
+              `Failed to git remove deleted file ${filePath}:`,
               error,
             );
+            // Continue even if remove fails as the file was still deleted
+          }
+        } else {
+          logger.warn(`File to delete does not exist: ${fullFilePath}`);
+        }
+        if (isServerFunction(filePath)) {
+          try {
+            await deleteSupabaseFunction({
+              supabaseProjectId: chatWithApp.app.supabaseProjectId!,
+              functionName: getFunctionNameFromPath(filePath),
+            });
+          } catch (error) {
             errors.push({
-              message: `Failed to read uploaded file: ${fileInfo.originalName}`,
+              message: `Failed to delete Supabase function: ${filePath}`,
               error: error,
             });
           }
         }
       }
 
-      // Ensure directory exists
-      const dirPath = path.dirname(fullFilePath);
-      fs.mkdirSync(dirPath, { recursive: true });
+      // Process all file renames
+      for (const tag of dyadRenameTags) {
+        const fromPath = safeJoin(appPath, tag.from);
+        const toPath = safeJoin(appPath, tag.to);
 
-      // Write file content
-      fs.writeFileSync(fullFilePath, content);
-      logger.log(`Successfully wrote file: ${fullFilePath}`);
-      writtenFiles.push(filePath);
-      if (isServerFunction(filePath) && typeof content === "string") {
-        try {
-          await deploySupabaseFunctions({
-            supabaseProjectId: chatWithApp.app.supabaseProjectId!,
-            functionName: path.basename(path.dirname(filePath)),
-            content: content,
+        // Ensure target directory exists
+        const dirPath = path.dirname(toPath);
+        fs.mkdirSync(dirPath, { recursive: true });
+
+        // Rename the file
+        if (fs.existsSync(fromPath)) {
+          fs.renameSync(fromPath, toPath);
+          logger.log(`Successfully renamed file: ${fromPath} -> ${toPath}`);
+          renamedFiles.push(tag.to);
+
+          // Add the new file and remove the old one from git
+          await git.add({
+            fs,
+            dir: appPath,
+            filepath: tag.to,
           });
-        } catch (error) {
-          errors.push({
-            message: `Failed to deploy Supabase function: ${filePath}`,
-            error: error,
-          });
+          try {
+            await git.remove({
+              fs,
+              dir: appPath,
+              filepath: tag.from,
+            });
+          } catch (error) {
+            logger.warn(`Failed to git remove old file ${tag.from}:`, error);
+            // Continue even if remove fails as the file was still renamed
+          }
+        } else {
+          logger.warn(`Source file for rename does not exist: ${fromPath}`);
+        }
+        if (isServerFunction(tag.from)) {
+          try {
+            await deleteSupabaseFunction({
+              supabaseProjectId: chatWithApp.app.supabaseProjectId!,
+              functionName: getFunctionNameFromPath(tag.from),
+            });
+          } catch (error) {
+            warnings.push({
+              message: `Failed to delete Supabase function: ${tag.from} as part of renaming ${tag.from} to ${tag.to}`,
+              error: error,
+            });
+          }
+        }
+        if (isServerFunction(tag.to)) {
+          try {
+            await deploySupabaseFunctions({
+              supabaseProjectId: chatWithApp.app.supabaseProjectId!,
+              functionName: getFunctionNameFromPath(tag.to),
+              content: await readFileFromFunctionPath(toPath),
+            });
+          } catch (error) {
+            errors.push({
+              message: `Failed to deploy Supabase function: ${tag.to} as part of renaming ${tag.from} to ${tag.to}`,
+              error: error,
+            });
+          }
+        }
+      }
+
+      // Process all file writes
+      for (const tag of dyadWriteTags) {
+        const filePath = tag.path;
+        let content: string | Buffer = tag.content;
+        const fullFilePath = safeJoin(appPath, filePath);
+
+        // Check if content (stripped of whitespace) exactly matches a file ID and replace with actual file content
+        if (fileUploadsMap) {
+          const trimmedContent = tag.content.trim();
+          const fileInfo = fileUploadsMap.get(trimmedContent);
+          if (fileInfo) {
+            try {
+              const fileContent = await readFile(fileInfo.filePath);
+              content = fileContent;
+              logger.log(
+                `Replaced file ID ${trimmedContent} with content from ${fileInfo.originalName}`,
+              );
+            } catch (error) {
+              logger.error(
+                `Failed to read uploaded file ${fileInfo.originalName}:`,
+                error,
+              );
+              errors.push({
+                message: `Failed to read uploaded file: ${fileInfo.originalName}`,
+                error: error,
+              });
+            }
+          }
+        }
+
+        // Ensure directory exists
+        const dirPath = path.dirname(fullFilePath);
+        fs.mkdirSync(dirPath, { recursive: true });
+
+        // Write file content
+        fs.writeFileSync(fullFilePath, content);
+        logger.log(`Successfully wrote file: ${fullFilePath}`);
+        writtenFiles.push(filePath);
+        if (isServerFunction(filePath) && typeof content === "string") {
+          try {
+            await deploySupabaseFunctions({
+              supabaseProjectId: chatWithApp.app.supabaseProjectId!,
+              functionName: path.basename(path.dirname(filePath)),
+              content: content,
+            });
+          } catch (error) {
+            errors.push({
+              message: `Failed to deploy Supabase function: ${filePath}`,
+              error: error,
+            });
+          }
         }
       }
     }
 
     // If we have any file changes, commit them all at once
     hasChanges =
-      writtenFiles.length > 0 ||
-      renamedFiles.length > 0 ||
-      deletedFiles.length > 0 ||
-      dyadAddDependencyPackages.length > 0;
+      applyChanges &&
+      (writtenFiles.length > 0 ||
+        renamedFiles.length > 0 ||
+        deletedFiles.length > 0 ||
+        dyadAddDependencyPackages.length > 0);
 
     let uncommittedFiles: string[] = [];
     let extraFilesError: string | undefined;
 
-    if (hasChanges) {
+    if (applyChanges && hasChanges) {
       // Stage all written files
       for (const file of writtenFiles) {
         await git.add({
@@ -463,7 +502,7 @@ export async function processFullResponseActions(
       .where(eq(messages.id, messageId));
 
     return {
-      updatedFiles: hasChanges,
+      updatedFiles: applyChanges && hasChanges,
       extraFiles: uncommittedFiles.length > 0 ? uncommittedFiles : undefined,
       extraFilesError,
     };

@@ -27,15 +27,20 @@ export const DyadExecuteSql: React.FC<DyadExecuteSqlProps> = ({
   const inProgress = state === "pending";
   const aborted = state === "aborted";
   const queryDescription = description || node?.properties?.description;
+  const result = node?.properties?.result as string | undefined;
+  const error = node?.properties?.error as string | undefined;
+  const hasError = !!error;
 
   return (
     <div
       className={`bg-(--background-lightest) hover:bg-(--background-lighter) rounded-lg px-4 py-2 border my-2 cursor-pointer ${
-        inProgress
-          ? "border-amber-500"
-          : aborted
-            ? "border-red-500"
-            : "border-border"
+        hasError
+          ? "border-red-500"
+          : inProgress
+            ? "border-amber-500"
+            : aborted
+              ? "border-red-500"
+              : "border-border"
       }`}
       onClick={() => setIsContentVisible(!isContentVisible)}
     >
@@ -78,6 +83,16 @@ export const DyadExecuteSql: React.FC<DyadExecuteSqlProps> = ({
       {isContentVisible && (
         <div className="text-xs">
           <CodeHighlight className="language-sql">{children}</CodeHighlight>
+          {error && (
+            <div className="mt-2 text-red-600 dark:text-red-400">
+              <CodeHighlight className="language-text">{error}</CodeHighlight>
+            </div>
+          )}
+          {result && !error && (
+            <div className="mt-2">
+              <CodeHighlight className="language-json">{result}</CodeHighlight>
+            </div>
+          )}
         </div>
       )}
     </div>
