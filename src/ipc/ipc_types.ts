@@ -229,6 +229,11 @@ export interface ApproveProposalResult {
 export interface ImportAppParams {
   path: string;
   appName: string;
+  /**
+   * Optional destination path for the imported app. If omitted, the app's
+   * current path will be used directly without copying.
+   */
+  storagePath?: string;
   installCommand?: string;
   startCommand?: string;
 }

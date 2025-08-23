@@ -990,6 +990,10 @@ export class IpcClient {
     return this.ipcRenderer.invoke("select-app-folder");
   }
 
+  public async selectStorageFolder(): Promise<{ path: string | null }> {
+    return this.ipcRenderer.invoke("select-storage-folder");
+  }
+
   public async checkAiRules(params: {
     path: string;
   }): Promise<{ exists: boolean }> {

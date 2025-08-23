@@ -3,7 +3,6 @@ import fs from "fs/promises";
 import path from "path";
 import { createLoggedHandler } from "./safe_handle";
 import log from "electron-log";
-import { getDyadAppPath } from "../../paths/paths";
 import { apps } from "@/db/schema";
 import { db } from "@/db";
 import { chats } from "@/db/schema";
@@ -35,6 +34,19 @@ export function registerImportHandlers() {
     return { path: selectedPath, name: folderName };
   });
 
+  handle("select-storage-folder", async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ["openDirectory"],
+      title: "Select Storage Location",
+    });
+
+    if (result.canceled) {
+      return { path: null };
+    }
+
+    return { path: result.filePaths[0] };
+  });
+
   // Handler for checking if AI_RULES.md exists
   handle("check-ai-rules", async (_, { path: appPath }: { path: string }) => {
     try {
@@ -47,16 +59,6 @@ export function registerImportHandlers() {
 
   // Handler for checking if an app name is already taken
   handle("check-app-name", async (_, { appName }: { appName: string }) => {
-    // Check filesystem
-    const appPath = getDyadAppPath(appName);
-    try {
-      await fs.access(appPath);
-      return { exists: true };
-    } catch {
-      // Path doesn't exist, continue checking database
-    }
-
-    // Check database
     const existingApp = await db.query.apps.findFirst({
       where: eq(apps.name, appName),
     });
@@ -72,6 +74,7 @@ export function registerImportHandlers() {
       {
         path: sourcePath,
         appName,
+        storagePath,
         installCommand,
         startCommand,
       }: ImportAppParams,
@@ -83,22 +86,24 @@ export function registerImportHandlers() {
         throw new Error("Source folder does not exist");
       }
 
-      const destPath = getDyadAppPath(appName);
+      const destPath = storagePath ?? sourcePath;
 
-      // Check if the app already exists
-      const errorMessage = "An app with this name already exists";
-      try {
-        await fs.access(destPath);
-        throw new Error(errorMessage);
-      } catch (error: any) {
-        if (error.message === errorMessage) {
-          throw error;
+      if (destPath !== sourcePath) {
+        // Check if destination already exists
+        const errorMessage = "Destination already exists";
+        try {
+          await fs.access(destPath);
+          throw new Error(errorMessage);
+        } catch (error: any) {
+          if (error.message === errorMessage) {
+            throw error;
+          }
         }
+
+        // Copy the app folder to the destination directory.
+        // Why not use fs.cp? Because we want stable ordering for tests.
+        await copyDirectoryRecursive(sourcePath, destPath);
       }
-      // Copy the app folder to the Dyad apps directory.
-      // Why not use fs.cp? Because we want stable ordering for
-      // tests.
-      await copyDirectoryRecursive(sourcePath, destPath);
 
       const isGitRepo = await fs
         .access(path.join(destPath, ".git"))
@@ -131,8 +136,7 @@ export function registerImportHandlers() {
         .insert(apps)
         .values({
           name: appName,
-          // Use the name as the path for now
-          path: appName,
+          path: destPath,
           installCommand: installCommand ?? null,
           startCommand: startCommand ?? null,
         })

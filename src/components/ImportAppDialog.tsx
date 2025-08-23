@@ -41,6 +41,7 @@ interface ImportAppDialogProps {
 
 export function ImportAppDialog({ isOpen, onClose }: ImportAppDialogProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [storagePath, setStoragePath] = useState<string | null>(null);
   const [hasAiRules, setHasAiRules] = useState<boolean | null>(null);
   const [customAppName, setCustomAppName] = useState<string>("");
   const [nameExists, setNameExists] = useState<boolean>(false);
@@ -77,6 +78,7 @@ export function ImportAppDialog({ isOpen, onClose }: ImportAppDialogProps) {
       });
       setHasAiRules(aiRulesCheck.exists);
       setSelectedPath(result.path);
+      setStoragePath(result.path);
 
       // Use the folder name from the IPC response
       setCustomAppName(result.name);
@@ -91,11 +93,26 @@ export function ImportAppDialog({ isOpen, onClose }: ImportAppDialogProps) {
     },
   });
 
+  const selectStorageMutation = useMutation({
+    mutationFn: async () => {
+      const result = await IpcClient.getInstance().selectStorageFolder();
+      if (!result.path) {
+        throw new Error("No folder selected");
+      }
+      setStoragePath(result.path);
+      return result;
+    },
+    onError: (error: Error) => {
+      showError(error.message);
+    },
+  });
+
   const importAppMutation = useMutation({
     mutationFn: async () => {
       if (!selectedPath) throw new Error("No folder selected");
       return IpcClient.getInstance().importApp({
         path: selectedPath,
+        storagePath: storagePath ?? undefined,
         appName: customAppName,
         installCommand: installCommand || undefined,
         startCommand: startCommand || undefined,
@@ -129,12 +146,17 @@ export function ImportAppDialog({ isOpen, onClose }: ImportAppDialogProps) {
     selectFolderMutation.mutate();
   };
 
+  const handleSelectStorageFolder = () => {
+    selectStorageMutation.mutate();
+  };
+
   const handleImport = () => {
     importAppMutation.mutate();
   };
 
   const handleClear = () => {
     setSelectedPath(null);
+    setStoragePath(null);
     setHasAiRules(null);
     setCustomAppName("");
     setNameExists(false);
@@ -209,6 +231,29 @@ export function ImportAppDialog({ isOpen, onClose }: ImportAppDialogProps) {
                   >
                     <X className="h-4 w-4" />
                     <span className="sr-only">Clear selection</span>
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-sm ml-2 mb-2">Storage location</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={storagePath ?? ""}
+                    readOnly
+                    className="w-full"
+                    disabled={importAppMutation.isPending}
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={handleSelectStorageFolder}
+                    disabled={
+                      selectStorageMutation.isPending ||
+                      importAppMutation.isPending
+                    }
+                    className="flex-shrink-0"
+                  >
+                    Change Location
                   </Button>
                 </div>
               </div>

@@ -3,6 +3,16 @@ import os from "node:os";
 import { IS_TEST_BUILD } from "../ipc/utils/test_utils";
 
 export function getDyadAppPath(appPath: string): string {
+  if (appPath === "$APP_BASE_PATH") {
+    return "$APP_BASE_PATH";
+  }
+
+  // If an absolute path is provided, use it directly. This allows Dyad to work
+  // with apps that live outside of the default "dyad-apps" directory.
+  if (path.isAbsolute(appPath)) {
+    return appPath;
+  }
+
   if (IS_TEST_BUILD) {
     const electron = getElectron();
     return path.join(electron!.app.getPath("userData"), "dyad-apps", appPath);

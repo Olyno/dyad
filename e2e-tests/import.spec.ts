@@ -1,4 +1,5 @@
 import path from "path";
+import fs from "fs";
 import { testSkipIfWindows } from "./helpers/test_helper";
 import { expect } from "@playwright/test";
 import * as eph from "electron-playwright-helpers";
@@ -16,6 +17,11 @@ testSkipIfWindows("import app", async ({ po }) => {
     .getByRole("textbox", { name: "Enter new app name" })
     .fill("minimal-imported-app");
   await po.page.getByRole("button", { name: "Import" }).click();
+
+  const copiedPath = po.getAppPath({ appName: "minimal-imported-app" });
+  await expect(async () => {
+    expect(fs.existsSync(copiedPath)).toBe(false);
+  }).toPass();
 
   await po.snapshotPreview();
   await po.snapshotMessages();
@@ -99,3 +105,25 @@ testSkipIfWindows(
     await po.snapshotPreview();
   },
 );
+
+testSkipIfWindows("import app to custom storage location", async ({ po }) => {
+  await po.setUp();
+  await po.page.getByRole("button", { name: "Import App" }).click();
+  const sourcePath = path.join(__dirname, "fixtures", "import-app", "minimal");
+  await eph.stubDialog(po.electronApp, "showOpenDialog", {
+    filePaths: [sourcePath],
+  });
+  await po.page.getByRole("button", { name: "Select Folder" }).click();
+
+  const destPath = path.join(po.userDataDir, "custom-location");
+  await eph.stubDialog(po.electronApp, "showOpenDialog", {
+    filePaths: [destPath],
+  });
+  await po.page.getByRole("button", { name: "Change Location" }).click();
+
+  await po.page.getByRole("button", { name: "Import" }).click();
+
+  await expect(async () => {
+    expect(fs.existsSync(destPath)).toBe(true);
+  }).toPass();
+});
